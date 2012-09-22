@@ -319,17 +319,18 @@ ISR(TIMER2_OVF_vect) { // Playback interrupt
   uint8_t  w, inv, hi, lo, bit;
   int      o2, i2, pos;
 
-  // Cross fade around circular buffer 'seam'
-  // NEED TO WORK ON THIS
+  // Cross fade around circular buffer 'seam'.
+  // Need to work on this -- cross-fade index stuff might be off by one
+  // here and there.
   if((o2 = (int)out) == (i2 = (int)in)) {
     // Sample positions coincide.  Use cross-fade buffer data directly.
     pos = nSamples + xf;
     hi = (buffer2[pos] << 2) | (buffer1[pos] >> 6); // Expand 10-bit data
     lo = (buffer1[pos] << 2) |  buffer2[pos];       // to 12 bits
   } if((o2 < i2) && (o2 > (i2 - XFADE))) {
-    w   = in - out;       // Weight of sample (1-n)
-    inv = XFADE - w;      // Weight of xfade
-    pos = nSamples + inv; // Index of xfade data
+    w   = in - out;  // Weight of sample (1-n)
+    inv = XFADE - w; // Weight of xfade
+    pos = nSamples + ((inv + xf) % XFADE);
     s   = ((buffer2[out] << 8) | buffer1[out]) * w +
           ((buffer2[pos] << 8) | buffer1[pos]) * inv;
     hi = s >> 10; // Shift 14 bit result
@@ -337,7 +338,7 @@ ISR(TIMER2_OVF_vect) { // Playback interrupt
   } else if (o2 > (i2 + nSamples - XFADE)) {
     w   = in + nSamples - out;
     inv = XFADE - w;
-    pos = nSamples + inv;
+    pos = nSamples + ((inv + xf) % XFADE);
     s   = ((buffer2[out] << 8) | buffer1[out]) * w +
           ((buffer2[pos] << 8) | buffer1[pos]) * inv;
     hi = s >> 10; // Shift 14 bit result
