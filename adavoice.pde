@@ -15,7 +15,7 @@ If using the WAV playback, you will also need:
  - Keypad, buttons or other sensor(s) for triggering sounds
 Software requirements:
  - WaveHC library for Arduino
- - WAV files on FAT-formatted SD card
+ - Demo WAV files on FAT-formatted SD card
 
 This example sketch uses a 3x4 keypad for triggering sounds...but with
 some changes could be adapted to use several discrete buttons, Hall effect
@@ -69,7 +69,6 @@ WaveHC    wave;  // This is the only wave (audio) object, -- we only play one at
 
 uint16_t in = 0, out = 0, xf = 0, nSamples; // Audio sample counters
 uint8_t  adc_save;                          // Default ADC mode
-boolean  sd = false;                        // true when SD card is confirmed OK
 
 // WaveHC didn't declare it's working buffers private or static,
 // so we can be sneaky and borrow the same RAM for audio sampling!
@@ -89,23 +88,13 @@ uint8_t
 #define DEBOUNCE 10            // Number of iterations before button 'takes'
 
 // Button/WAV information.  Number of elements here should match the
-// number of rows times the number of columns (e.g. 3x4 = 12 items):
-struct WB {
-  char    *filename; // WAV file corresponding to this button
-  boolean loops;     // If true, button can be held to repeat the sound
-} waveButton[] = {
-  { "0.WAV", false },
-  { "1.WAV", false },
-  { "2.WAV", false },
-  { "3.WAV", false },
-  { "4.WAV", false },
-  { "5.WAV", false },
-  { "6.WAV", false },
-  { "7.WAV", false },
-  { "8.WAV", false },
-  { "9.WAV", false },
-  { "P.WAV", false },
-  { "P.WAV", true  } };
+// number of rows times the number of columns, plus one:
+const char *sound[] = {
+  "breath" , "destroy", "saber"   , // Row 1 = Darth Vader sounds
+  "zilla"  , "crunch" , "burp"    , // Row 2 = Godzilla sounds
+  "hithere", "smell"  , "squirrel", // Row 3 = Dug the dog sounds
+  "carhorn", "foghorn", "door"    , // Row 4 = Cartoon/SFX sound
+  "startup" };                      // Extra item = boot sound
 
 
 //////////////////////////////////// SETUP
@@ -123,39 +112,34 @@ void setup() {
   else {
     PgmPrintln("Files found:");
     root.ls();
-    sd = true;
   }
 
-  // Set up ADC
+  // Play startup sound (last file in list).
+  // This also initializes the DAC pins, saving us some code.
+  playfile(sizeof(sound) / sizeof(sound[0]) - 1);
+
+  // Optional, but may make sampling and playback a little smoother:
+  // Disable Timer0 interrupt.  This means delay(), millis() etc. won't
+  // work.  Comment this out if you really, really need those functions.
+  TIMSK0 = 0;
+
+  // Set up Analog-to-Digital converter:
   analogReference(EXTERNAL); // 3.3V to AREF
   adc_save = ADCSRA;         // Save ADC setting for restore later
 
-  // Set up DAC pins
-  DAC_CS_DDR     |=  _BV(DAC_CS);
-  DAC_CLK_DDR    |=  _BV(DAC_CLK);
-  DAC_DI_DDR     |=  _BV(DAC_DI);
-  DAC_LATCH_DDR  |=  _BV(DAC_LATCH);
-  DAC_CS_PORT    |=  _BV(DAC_CS);    // Unselect DAC
-  DAC_LATCH_PORT &= ~_BV(DAC_LATCH); // DAC Latch down (always, unbuffered)
-  DAC_CLK_PORT   &= ~_BV(DAC_CLK);   // Clock low
-
-  // Optional, but might make sampling and playback a little smoother:
-  // Disable Timer0 interrupt.  This means delay(), millis() etc. won't work.
-  // Comment this out if you really, really need those functions.
-  TIMSK0 = 0;
-
-  // Set keypad rows to outputs, set to HIGH logic level
+  // Set keypad rows to outputs, set to HIGH logic level:
   for(i=0; i<sizeof(rows); i++) {
     pinMode(rows[i], OUTPUT);
     digitalWrite(rows[i], HIGH);
   }
-  // Set keypad columns to inputs, enable pull-up resistors
+  // Set keypad columns to inputs, enable pull-up resistors:
   for(i=0; i<sizeof(cols); i++) {
     pinMode(cols[i], INPUT);
     digitalWrite(cols[i], HIGH);
   }
 
-  startPitchShift(); // Begin in pitch-shift mode by default
+  while(wave.isplaying); // Wait for startup sound to finish...
+  startPitchShift();     // and start the pitch-shift mode by default.
 }
 
 
@@ -173,20 +157,10 @@ void loop() {
       button = r * sizeof(cols) + c;  // Get button index.
       if(button == prev) {            // Same button as before?
         if(++count >= DEBOUNCE) {     // Yes.  Held beyond debounce threshold?
-          Serial.print("Button: ");
-          Serial.print(button);
-          Serial.print(" file: ");
-          Serial.println(waveButton[button].filename);
-          stopPitchShift();                              // Stop voice effect
-          if(waveButton[button].loops == true) {         // Loopable WAV?
-            do {
-              playcomplete(waveButton[button].filename); // Play WAV
-            } while(digitalRead(cols[c]) == LOW);        // Repeat while button held
-          } else {
-            playcomplete(waveButton[button].filename);   // Play WAV
-            while(digitalRead(cols[c]) == LOW);          // Wait for button release
-          }
-          startPitchShift();          // Resume voice effect
+          if(wave.isplaying) wave.stop();      // Stop current WAV (if any)
+          else               stopPitchShift(); // or stop voice effect
+          playfile(button);                    // and play new sound.
+          while(digitalRead(cols[c]) == LOW);  // Wait for button release.
           prev  = 255;                // Reset debounce values.
           count = 0;
         }
@@ -199,45 +173,28 @@ void loop() {
 
   // Restore current row to HIGH logic state and advance row counter...
   digitalWrite(rows[r], HIGH);
-  if(++r >= sizeof(rows)) r = 0;
+  if(++r >= sizeof(rows)) { // If last row scanned...
+    r = 0;                  // Reset row counter
+    // If no new sounds have been triggered at this point, and if the
+    // pitch-shifter is not running, re-start it...
+    if(!wave.isplaying && !(TIMSK2 & _BV(TOIE2))) startPitchShift();
+  }
 }
 
 
 //////////////////////////////////// HELPERS
 
-// Print error message (program not halted -- voice FX continues)
-void error_P(const char *str) {
-  PgmPrint("Error: ");
-  SerialPrint_P(str);
-  sdErrorCheck();
-}
-
-// Print error message if SD I/O error (program not halted -- voice FX continues)
-void sdErrorCheck(void) {
-  if((sd == false) || !card.errorCode()) return;
-  PgmPrint("\r\nSD I/O error: ");
-  Serial.print(card.errorCode(), HEX);
-  PgmPrint(", ");
-  Serial.println(card.errorData(), HEX);
-}
-
-// Play a file, wait for it to complete
-void playcomplete(char *name) {
-  playfile(name);
-  while(wave.isplaying);
-  sdErrorCheck(); // see if an error occurred while playing
-}
-
 // Open and start playing a WAV file
-void playfile(char *name) {
+void playfile(int idx) {
+  char filename[13];
 
-  if(sd == false) return; // SD library not initialized
+  (void)sprintf(filename,"%s.wav", sound[idx]);
+  Serial.print("File: ");
+  Serial.println(filename);
 
-  if(wave.isplaying) wave.stop(); // Stop current WAV (if any)
-
-  if(!file.open(root, name)) {
+  if(!file.open(root, filename)) {
     PgmPrint("Couldn't open file ");
-    Serial.print(name);
+    Serial.print(filename);
     return;
   }
   if(!wave.create(file)) {
@@ -297,7 +254,7 @@ void startPitchShift() {
 }
 
 void stopPitchShift() {
-  ADCSRA = adc_save; // Disable ADC interrupt
+  ADCSRA = adc_save; // Disable ADC interrupt and allow normal use
   TIMSK2 = 0;        // Disable Timer2 Interrupt
 }
 
