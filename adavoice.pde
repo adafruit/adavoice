@@ -8,7 +8,7 @@ Hardware requirements:
  - Speaker attached to Wave Shield output
  - Battery for portable use
 If using the voice pitch changer, you will also need:
- - Adafruit microphone amplifier breakout (TBD)
+ - Adafruit Microphone Breakout
  - 10K potentiometer for setting pitch (or hardcode in sketch)
 If using the WAV playback, you will also need:
  - SD card
@@ -55,17 +55,13 @@ WaveHC    wave;  // This is the only wave (audio) object, -- we only play one at
 
 // Wave shield DAC: digital pins 2, 3, 4, 5
 #define DAC_CS_PORT    PORTD
-#define DAC_CS_DDR     DDRD
 #define DAC_CS         PORTD2
 #define DAC_CLK_PORT   PORTD
-#define DAC_CLK_DDR    DDRD
 #define DAC_CLK        PORTD3
 #define DAC_DI_PORT    PORTD
-#define DAC_DI_DDR     DDRD
-#define DAC_DI         PORTB4
+#define DAC_DI         PORTD4
 #define DAC_LATCH_PORT PORTD
-#define DAC_LATCH_DDR  DDRD
-#define DAC_LATCH      PORTB5
+#define DAC_LATCH      PORTD5
 
 uint16_t in = 0, out = 0, xf = 0, nSamples; // Audio sample counters
 uint8_t  adc_save;                          // Default ADC mode
@@ -87,8 +83,8 @@ uint8_t
   count  = 0;                  // Counter for button debouncing
 #define DEBOUNCE 10            // Number of iterations before button 'takes'
 
-// Button/WAV information.  Number of elements here should match the
-// number of rows times the number of columns, plus one:
+// Keypad/WAV information.  Number of elements here should match the
+// number of keypad rows times the number of columns, plus one:
 const char *sound[] = {
   "breath" , "destroy", "saber"   , // Row 1 = Darth Vader sounds
   "zilla"  , "crunch" , "burp"    , // Row 2 = Godzilla sounds
@@ -104,6 +100,15 @@ void setup() {
 
   Serial.begin(9600);           
 
+  // The WaveHC library normally initializes the DAC pins...but only after
+  // an SD card is detected and a valid file is passed.  Need to init the
+  // pins manually here so that voice FX works even without a card.
+  pinMode(2, OUTPUT);    // Chip select
+  pinMode(3, OUTPUT);    // Serial clock
+  pinMode(4, OUTPUT);    // Serial data
+  pinMode(5, OUTPUT);    // Latch
+  digitalWrite(2, HIGH); // Set chip select high
+
   // Init SD library, show root directory.  Note that errors are displayed
   // but NOT regarded as fatal -- the program will continue with voice FX!
   if(!card.init())             SerialPrint_P("Card init. failed!");
@@ -112,11 +117,9 @@ void setup() {
   else {
     PgmPrintln("Files found:");
     root.ls();
+    // Play startup sound (last file in array).
+    playfile(sizeof(sound) / sizeof(sound[0]) - 1);
   }
-
-  // Play startup sound (last file in list).
-  // This also initializes the DAC pins, saving us some code.
-  playfile(sizeof(sound) / sizeof(sound[0]) - 1);
 
   // Optional, but may make sampling and playback a little smoother:
   // Disable Timer0 interrupt.  This means delay(), millis() etc. won't
@@ -144,6 +147,11 @@ void setup() {
 
 
 //////////////////////////////////// LOOP
+
+// As written here, the loop function scans a keypad to triggers sounds
+// (stopping and restarting the voice effect as needed).  If all you need
+// is a couple of buttons, it may be easier to tear this out and start
+// over with some simple digitalRead() calls.
 
 void loop() {
 
@@ -214,12 +222,14 @@ void startPitchShift() {
   Serial.print("Pitch: ");
   Serial.println(pitch);
 
-  // Ideally this may want to vary with pitch.  But until optimal size
-  // can be determined, just going with a fixed sample size for now:
-  //nSamples = F_CPU / 3200 / OCR2A;
+  // Right now the sketch just uses a fixed sound buffer length of
+  // 128 samples.  It may be the case that the buffer length should
+  // vary with pitch for better results...further experimentation
+  // is required here.
   nSamples = 128;
-  if(nSamples > MAX_SAMPLES)      nSamples = MAX_SAMPLES;
-  else if(nSamples < (XFADE * 2)) nSamples = XFADE * 2;
+  //nSamples = F_CPU / 3200 / OCR2A; // ???
+  //if(nSamples > MAX_SAMPLES)      nSamples = MAX_SAMPLES;
+  //else if(nSamples < (XFADE * 2)) nSamples = XFADE * 2;
 
   memset(buffer1, 0, nSamples + XFADE); // Clear sample buffers
   memset(buffer2, 2, nSamples + XFADE); // (set all samples to 512)
@@ -277,14 +287,15 @@ ISR(TIMER2_OVF_vect) { // Playback interrupt
   int      o2, i2, pos;
 
   // Cross fade around circular buffer 'seam'.
-  // Need to work on this -- cross-fade index stuff might be off by one
-  // here and there.
   if((o2 = (int)out) == (i2 = (int)in)) {
     // Sample positions coincide.  Use cross-fade buffer data directly.
     pos = nSamples + xf;
     hi = (buffer2[pos] << 2) | (buffer1[pos] >> 6); // Expand 10-bit data
     lo = (buffer1[pos] << 2) |  buffer2[pos];       // to 12 bits
   } if((o2 < i2) && (o2 > (i2 - XFADE))) {
+    // Output sample is close to end of input samples.  Cross-fade to
+    // avoid click.  The shift operations here assume that XFADE is 16;
+    // will need adjustment if that changes.
     w   = in - out;  // Weight of sample (1-n)
     inv = XFADE - w; // Weight of xfade
     pos = nSamples + ((inv + xf) % XFADE);
@@ -293,6 +304,7 @@ ISR(TIMER2_OVF_vect) { // Playback interrupt
     hi = s >> 10; // Shift 14 bit result
     lo = s >> 2;  // down to 12 bits
   } else if (o2 > (i2 + nSamples - XFADE)) {
+    // More cross-fade condition
     w   = in + nSamples - out;
     inv = XFADE - w;
     pos = nSamples + ((inv + xf) % XFADE);
@@ -305,6 +317,9 @@ ISR(TIMER2_OVF_vect) { // Playback interrupt
     hi = (buffer2[out] << 2) | (buffer1[out] >> 6); // Expand 10-bit data
     lo = (buffer1[out] << 2) |  buffer2[out];       // to 12 bits
   }
+
+  // Might be possible to tweak 'hi' and 'lo' at this point to achieve
+  // different voice modulations -- robot effect, etc.?
 
   DAC_CS_PORT &= ~_BV(DAC_CS); // Select DAC
   // Clock out 4 bits DAC config (not in loop because it's constant)
