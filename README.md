@@ -5,7 +5,7 @@ Build your own custom voice changer and effects box.
 Perfect for a costume, toy, art project, annoying the guy 
 in the next cubicle, etc.
 
-<iframe width="560" height="315" src="http://www.youtube.com/embed/eRdSi4gJz98?rel=0" frameborder="0" allowfullscreen></iframe>
+<a href="http://learn.adafruit.com/wave-shield-voice-changer">Check out the full tutorial at http://learn.adafruit.com/wave-shield-voice-changer</a>
 
 To build this project you'll need:
 
