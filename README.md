@@ -13,7 +13,7 @@ To build this project you'll need:
   * Adafruit Wave Shield Pack - http://www.adafruit.com/products/175
 (Comes with wave shield, SD card, Speaker, wire)
   * Matrix Keypad - http://www.adafruit.com/products/419
-  *10K potentiometer - http://www.adafruit.com/products/562
+  * 10K potentiometer - http://www.adafruit.com/products/562
 
 
 For portable use, a 6 x AA battery pack will last for many many hours
