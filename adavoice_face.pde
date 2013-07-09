@@ -65,7 +65,9 @@ unsigned long newsum = 0L;
 #define MATRIX_MOUTH_MIDDLE 2
 #define MATRIX_MOUTH_RIGHT  3
 
-Adafruit_8x8matrix matrix[4]; // Array of Adafruit_8x8matrix objects
+Adafruit_8x8matrix matrix[4] = { // Array of Adafruit_8x8matrix objects
+  Adafruit_8x8matrix(), Adafruit_8x8matrix(),
+  Adafruit_8x8matrix(), Adafruit_8x8matrix() };
 
 static uint8_t PROGMEM // Bitmaps are stored in program memory
   blinkImg[][8] = {    // Eye animation frames
@@ -241,9 +243,8 @@ void setup() {
   // Seed random number generator from an unused analog input:
   randomSeed(analogRead(A2));
 
-  // Instantiate and initialize each matrix object:
+  // Initialize each matrix object:
   for(i=0; i<4; i++) {
-    matrix[i] = Adafruit_8x8matrix();
     matrix[i].begin(pgm_read_byte(&matrixAddr[i]));
   }
 
